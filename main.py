@@ -1,4 +1,5 @@
 import pygame, numpy as np, sys
+from scipy.signal import convolve2d
 from PIL import Image
 import math
 
@@ -12,10 +13,19 @@ for x in range(buckets):
 	sub = font_surface.subsurface((x*pxsz, 0, pxsz, font_dims[1]))
 	ascii_levels.append(sub)
 
-screen = pygame.display.set_mode((1200, 900))
-
 fool = "assets/fool.png"
 kent = "assets/kent.png"
+
+# https://en.wikipedia.org/wiki/Sobel_operator
+sobel_kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+sobel_kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+
+def vector_luma(pixels):
+	rgb = pixels[..., :3]
+	rgb = rgb ** 2.2
+	weights = np.array([0.2126, 0.7152, 0.0722])
+	out = np.sum(rgb * weights, axis=-1)
+	return out[..., np.newaxis]
 
 # https://en.wikipedia.org/wiki/Gaussian_blur#Mathematics
 def gaussian(sigma, x, y):
@@ -33,7 +43,31 @@ def gaussian_kernel(sigma, r):
 			kernel[x+r, y+r]=gaussian(sigma, x,y)
 	return kernel
 
-print(gaussian_kernel(1, 2))
+def convolve(img, kernel):
+	channels = []
+	for c in range(img.shape[2]):
+		conv = convolve2d(img[..., c], kernel, mode='same')
+		channels.append(conv)
+	return np.stack(channels, axis=2)
+
+def edge_detect(img_path):
+	kernel = gaussian_kernel(1, 2)
+
+	img = np.array(Image.open(img_path))
+	grayscale = vector_luma(img)
+
+	blurred = convolve(grayscale, kernel)
+	gx = convolve(blurred, sobel_kernel_x)
+	gy = convolve(blurred, sobel_kernel_y)
+
+	gradient = np.sqrt(gx*gx + gy*gy)
+	gradient = gradient.squeeze() # remove channel dim
+	gradient /= gradient.max() # normalize gradient
+
+	result = np.where(gradient > 0.25, gradient, 0)
+	result = (result * 255).astype(np.uint8)
+	output = Image.fromarray(result)
+	output.show()
 
 # https://en.wikipedia.org/wiki/Relative_luminance
 def luma(pixel):
@@ -78,9 +112,12 @@ def ascii_render(image_path, output_height, coords):
 	print()
 
 
+edge_detect(fool)
+"""
 pygame.init()
-ascii_render(fool, 800 / 8, (0, 50))
-ascii_render(kent, 800 / 8, (600, 50))
+screen = pygame.display.set_mode((1200, 900))
+ascii_render(fool, 900 / 8, (0, 0))
+ascii_render(kent, 900 / 8, (600, 0))
 
 pygame.display.flip()
 clock = pygame.time.Clock()
@@ -90,3 +127,4 @@ while running:
 			if event.type == pygame.QUIT: running = False
 	# pygame.display.flip()
 	clock.tick(60)
+"""
