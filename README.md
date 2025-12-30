@@ -2,5 +2,12 @@
 
 Experimental 2.5d video game art piece for King Lear (High School English project).
 
+### Render pipeline:
+- 5x5 guassian kernel downscaling
+- luminoscity reduction pass
+- sobel + gauss gradient edge detection
+- descretized luminoscity + gradient angle to blit output ascii
+- final color + loom shaders to framebuffer
+
 ![alt text](render.png)
-Latest render
+<p align="center">Latest render</p>
