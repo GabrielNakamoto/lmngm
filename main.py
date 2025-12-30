@@ -27,7 +27,8 @@ def vector_luma(pixels):
 	rgb = pixels[..., :3]
 	rgb = rgb ** 2.2
 	weights = np.array([0.2126, 0.7152, 0.0722])
-	out = np.sum(rgb * weights, axis=-1)
+	# out = np.sum(rgb * weights, axis=-1)
+	out = np.dot(rgb, weights)
 	return out[..., np.newaxis]
 
 # https://en.wikipedia.org/wiki/Gaussian_blur#Mathematics
@@ -38,7 +39,8 @@ def gaussian(sigma, x, y):
 	return base * math.exp(top)
 
 # returns gaussian kernel with radius r
-def gaussian_kernel(sigma, r):
+def gaussian_kernel(r):
+	sigma = r/2
 	s = (r*2)+1
 	kernel = np.zeros((s,s))
 	for x in range(-r, r+1, 1):
@@ -58,7 +60,7 @@ def edge_detect(grayscale):
 	sobel_kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
 	sobel_kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
 
-	gauss = gaussian_kernel(1, 2)
+	gauss = gaussian_kernel(2)
 
 	blurred = convolve(grayscale, gauss)
 	gx = convolve(blurred, sobel_kernel_x).squeeze()
@@ -70,18 +72,11 @@ def ascii_render(screen, image_path, output_height, coords):
 	print("Rendering:", image_path)
 	img = Image.open(image_path)
 	framebuffer = np.array(img)
-	print("Raw shape:", framebuffer.shape)
+
 	H, W, _ = framebuffer.shape
-
-	# downscale factor
 	N = int(H / output_height)
-	print("Downscale:", N)
 
-	nW = W//N
-	nH = H//N
-	print("New dims:", nH, nW)
-
-	gauss = gaussian_kernel(1., 2)
+	gauss = gaussian_kernel(2)
 	blurred = convolve(framebuffer, gauss)
 	downscaled = blurred[::N, ::N]
 	grayscale = vector_luma(downscaled)
@@ -104,13 +99,38 @@ def ascii_render(screen, image_path, output_height, coords):
 				char = ascii_edges[ind]
 			else:
 				char = ascii_levels[B]
-			screen.blit(char, (coords[0]+ x*8, coords[1] + y*8))
-	print()
+			try:
+				screen.blit(char, (coords[0]+ x*8, coords[1] + y*8))
+			except:
+				pass
+
+def color_shader(pixels):
+	pixels[:, :, 1]=0
+	pixels[:, :, 2]=0
+
+bloom_threshold = 0.9
+bloom_strength = 0.7
+def bloom_pass(pixels):
+	img = pixels.astype(np.float32) / 255.
+	luma = vector_luma(pixels).squeeze()
+	knee = 0.1
+	bright = np.clip((luma - bloom_threshold)/knee, 0, 1)
+
+	gauss = gaussian_kernel(4)
+	bloom = convolve(bright[..., np.newaxis], gauss)
+
+	img += bloom * bloom_strength
+	img = np.clip(img, 0, 1)
+	pixels += (img * 255).astype(np.uint8)
 
 pygame.init()
 screen = pygame.display.set_mode((1200, 900))
-ascii_render(screen, fool, 900 / 8, (0, 0))
-ascii_render(screen, kent, 900 / 8, (600, 0))
+ascii_render(screen, fool, 1000 / 8, (0, 0))
+ascii_render(screen, kent, 1000 / 8, (600, 0))
+
+pixels = pygame.surfarray.pixels3d(screen)
+color_shader(pixels)
+bloom_pass(pixels)
 
 pygame.display.flip()
 clock = pygame.time.Clock()
