@@ -3,9 +3,16 @@ from scipy.signal import convolve2d
 from PIL import Image
 import math
 
-fool = "assets/fool.png"
-kent = "assets/kent.png"
+fool = np.array(Image.open("assets/fool.png"))
+kent = np.array(Image.open("assets/kent.png"))
+castle = "assets/castle.jpg"
+tempest = "assets/tempest.jpg"
+
 edge_threshold = 0.35
+bloom_threshold = 0.9
+bloom_strength = 0.7
+
+# Eye close effect
 
 def load_ascii_map(filename):
 	font_surface = pygame.image.load(filename)
@@ -24,11 +31,15 @@ ascii_edges = load_ascii_map("assets/edgesASCII.png")
 
 # https://en.wikipedia.org/wiki/Relative_luminance
 def vector_luma(pixels):
-	rgb = pixels[..., :3]
-	rgb = rgb ** 2.2
+	srgb = pixels[..., :3] / 255.0
+	lin_rgb = np.where(
+		srgb < 0.04045,
+		srgb / 12.92,
+		((srgb + 0.055) / 1.055) ** 2.4
+	)
 	weights = np.array([0.2126, 0.7152, 0.0722])
 	# out = np.sum(rgb * weights, axis=-1)
-	out = np.dot(rgb, weights)
+	out = np.dot(lin_rgb, weights)
 	return out[..., np.newaxis]
 
 # https://en.wikipedia.org/wiki/Gaussian_blur#Mathematics
@@ -50,9 +61,10 @@ def gaussian_kernel(r):
 
 def convolve(img, kernel):
 	channels = []
-	for c in range(img.shape[2]):
+	for c in range(min(3,img.shape[2])):
 		conv = convolve2d(img[..., c], kernel, mode='same')
 		channels.append(conv)
+	if img.shape[2] > 3: channels.append(img[:, :, 3])
 	return np.stack(channels, axis=2)
 
 def edge_detect(grayscale):
@@ -68,29 +80,29 @@ def edge_detect(grayscale):
 
 	return (gx, gy)
 
-def ascii_render(screen, image_path, output_height, coords):
-	print("Rendering:", image_path)
-	img = Image.open(image_path)
-	framebuffer = np.array(img)
-
-	H, W, _ = framebuffer.shape
+def ascii_render(screen, framebuffer, output_height, coords, gamma=1, test=False):
+	H, W, C = framebuffer.shape
 	N = int(H / output_height)
 
+	# Pre-processing
 	gauss = gaussian_kernel(2)
 	blurred = convolve(framebuffer, gauss)
 	downscaled = blurred[::N, ::N]
-	grayscale = vector_luma(downscaled)
-	normalized = grayscale / grayscale.max()
-	gx, gy = edge_detect(normalized)
+	luma = vector_luma(downscaled)
+	normalized = (luma - luma.min()) / (luma.max() - luma.min()) # clamp 0->1
+	normalized **= gamma
+	gx, gy = edge_detect(luma)
 	G = np.sqrt(gx*gx + gy*gy)
 	G /= G.max()
-
+	
+	# Render ascii to framebuffer
 	for y, row in enumerate(normalized.squeeze()):
 		for x, L in enumerate(row):
 			char = None
 			B = round(L * (len(ascii_levels) - 1))
-			if B == 0: continue
-			if G[y, x] > edge_threshold:
+			if test: B = 0
+			if C > 3 and downscaled[y, x, 3] == 0: continue
+			if G[y, x] > edge_threshold and B > 0:
 				# theta is 0->2 pi, going counterclockwise from -x axis
 				theta = math.atan2(gy[y, x], gx[y, x]) + math.pi
 				quadrant = int(theta // (math.pi / 4))
@@ -100,19 +112,20 @@ def ascii_render(screen, image_path, output_height, coords):
 			else:
 				char = ascii_levels[B]
 			try:
+				# apply color shader to char surface first using downscale rgb value
 				screen.blit(char, (coords[0]+ x*8, coords[1] + y*8))
 			except:
-				pass
+				pass # Ignore off screen coords for now
 
-def color_shader(pixels):
+def color_shader(surface):
+	pixels = pygame.surfarray.pixels3d(surface)
 	pixels[:, :, 1]=0
 	pixels[:, :, 2]=0
 
-bloom_threshold = 0.9
-bloom_strength = 0.7
-def bloom_pass(pixels):
+def bloom_pass(surface):
+	pixels = pygame.surfarray.pixels3d(surface)
 	img = pixels.astype(np.float32) / 255.
-	luma = vector_luma(pixels).squeeze()
+	luma = vector_luma(pixels).squeeze() * 255
 	knee = 0.1
 	bright = np.clip((luma - bloom_threshold)/knee, 0, 1)
 
@@ -123,20 +136,31 @@ def bloom_pass(pixels):
 	img = np.clip(img, 0, 1)
 	pixels += (img * 255).astype(np.uint8)
 
+"""
+I need to rework so I just resize and blit characters to screen
+and do single shader pass on entire frame buffer
+"""
+
 pygame.init()
 screen = pygame.display.set_mode((1200, 900))
-ascii_render(screen, fool, 1000 / 8, (0, 0))
-ascii_render(screen, kent, 1000 / 8, (600, 0))
-
-pixels = pygame.surfarray.pixels3d(screen)
-color_shader(pixels)
-bloom_pass(pixels)
-
-pygame.display.flip()
+# pygame.image.save(screen, "render.png")
+# pygame.display.flip()
 clock = pygame.time.Clock()
 running = True
 while running:
 	for event in pygame.event.get():
 			if event.type == pygame.QUIT: running = False
-	# pygame.display.flip()
+
+	screen.fill(0)
+	# ascii_render(screen, "assets/reach.png", 600 / 8, (0, 0))
+	# ascii_render(screen, tempest, 1000 / 8, (0, 0), gamma=1/1.2)
+	# ascii_render(screen, "assets/child-peasants.png", 1000/8, (0,0), test=False)
+	# ascii_render(screen, "assets/peasants2.png", 1000/8, (500,-400), test=False)
+	# ascii_render(screen, castle, 1000 / 8, (0, 0), gamma=1/1.4)
+	ascii_render(screen, kent, 1000 / 8, (600, 0))
+	ascii_render(screen, fool, 1000 / 8, (0, 0))
+	color_shader(screen)
+	bloom_pass(screen)
+
+	pygame.display.flip()
 	clock.tick(60)
