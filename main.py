@@ -3,23 +3,26 @@ from scipy.signal import convolve2d
 from PIL import Image
 import math
 
-font_surface = pygame.image.load("assets/fillASCII.png")
-font_dims = font_surface.get_size()
-buckets = int(font_dims[0] / font_dims[1])
-pxsz = font_dims[1]
-
-ascii_levels = []
-for x in range(buckets):
-	sub = font_surface.subsurface((x*pxsz, 0, pxsz, font_dims[1]))
-	ascii_levels.append(sub)
-
 fool = "assets/fool.png"
 kent = "assets/kent.png"
+edge_threshold = 0.35
 
-# https://en.wikipedia.org/wiki/Sobel_operator
-sobel_kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
-sobel_kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+def load_ascii_map(filename):
+	font_surface = pygame.image.load(filename)
+	font_dims = font_surface.get_size()
+	N = int(font_dims[0] / font_dims[1])
+	pxsz = font_dims[1]
 
+	buckets = []
+	for x in range(N):
+		sub = font_surface.subsurface((x*pxsz, 0, pxsz, font_dims[1]))
+		buckets.append(sub)
+	return buckets
+
+ascii_levels = load_ascii_map("assets/fillASCII.png")
+ascii_edges = load_ascii_map("assets/edgesASCII.png")
+
+# https://en.wikipedia.org/wiki/Relative_luminance
 def vector_luma(pixels):
 	rgb = pixels[..., :3]
 	rgb = rgb ** 2.2
@@ -50,34 +53,20 @@ def convolve(img, kernel):
 		channels.append(conv)
 	return np.stack(channels, axis=2)
 
-def edge_detect(img_path):
-	kernel = gaussian_kernel(1, 2)
+def edge_detect(grayscale):
+	# https://en.wikipedia.org/wiki/Sobel_operator
+	sobel_kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+	sobel_kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
 
-	img = np.array(Image.open(img_path))
-	grayscale = vector_luma(img)
+	gauss = gaussian_kernel(1, 2)
 
-	blurred = convolve(grayscale, kernel)
-	gx = convolve(blurred, sobel_kernel_x)
-	gy = convolve(blurred, sobel_kernel_y)
+	blurred = convolve(grayscale, gauss)
+	gx = convolve(blurred, sobel_kernel_x).squeeze()
+	gy = convolve(blurred, sobel_kernel_y).squeeze()
 
-	gradient = np.sqrt(gx*gx + gy*gy)
-	gradient = gradient.squeeze() # remove channel dim
-	gradient /= gradient.max() # normalize gradient
+	return (gx, gy)
 
-	result = np.where(gradient > 0.25, gradient, 0)
-	result = (result * 255).astype(np.uint8)
-	output = Image.fromarray(result)
-	output.show()
-
-# https://en.wikipedia.org/wiki/Relative_luminance
-def luma(pixel):
-	r, g, b, a = pixel
-	r = r ** 2.2
-	g = g ** 2.2
-	b = b ** 2.2
-	return 0.2126*r + 0.7152*g + 0.0722*b
-
-def ascii_render(image_path, output_height, coords):
+def ascii_render(screen, image_path, output_height, coords):
 	print("Rendering:", image_path)
 	img = Image.open(image_path)
 	framebuffer = np.array(img)
@@ -92,32 +81,36 @@ def ascii_render(image_path, output_height, coords):
 	nH = H//N
 	print("New dims:", nH, nW)
 
-	# Average NxN blocks to a single pixel
-	newbuf = np.zeros((nH, nW))
-	for i in range(nH):
-		for j in range(nW):
-			block = framebuffer[i*N:(i+1)*N, j*N:(j+1)*N, :]
-			avg = 0
-			for p in block.reshape(-1, 4):
-				avg += luma(p)
-			avg /= N*N
-			newbuf[i, j]=avg
-	brightest = newbuf.max()
+	gauss = gaussian_kernel(1., 2)
+	blurred = convolve(framebuffer, gauss)
+	downscaled = blurred[::N, ::N]
+	grayscale = vector_luma(downscaled)
+	normalized = grayscale / grayscale.max()
+	gx, gy = edge_detect(normalized)
+	G = np.sqrt(gx*gx + gy*gy)
+	G /= G.max()
 
-	for y, row in enumerate(newbuf):
-		for x, l in enumerate(row):
-			normalized = l / brightest
-			ind = round(normalized * (len(ascii_levels) - 1))
-			screen.blit(ascii_levels[ind], (coords[0]+ x*8, coords[1] + y*8))
+	for y, row in enumerate(normalized.squeeze()):
+		for x, L in enumerate(row):
+			char = None
+			B = round(L * (len(ascii_levels) - 1))
+			if B == 0: continue
+			if G[y, x] > edge_threshold:
+				# theta is 0->2 pi, going counterclockwise from -x axis
+				theta = math.atan2(gy[y, x], gx[y, x]) + math.pi
+				quadrant = int(theta // (math.pi / 4))
+				quad_to_ind = [2, 3, 1, 4, 2, 3, 1, 4]
+				ind = quad_to_ind[quadrant]
+				char = ascii_edges[ind]
+			else:
+				char = ascii_levels[B]
+			screen.blit(char, (coords[0]+ x*8, coords[1] + y*8))
 	print()
 
-
-edge_detect(fool)
-"""
 pygame.init()
 screen = pygame.display.set_mode((1200, 900))
-ascii_render(fool, 900 / 8, (0, 0))
-ascii_render(kent, 900 / 8, (600, 0))
+ascii_render(screen, fool, 900 / 8, (0, 0))
+ascii_render(screen, kent, 900 / 8, (600, 0))
 
 pygame.display.flip()
 clock = pygame.time.Clock()
@@ -127,4 +120,3 @@ while running:
 			if event.type == pygame.QUIT: running = False
 	# pygame.display.flip()
 	clock.tick(60)
-"""
