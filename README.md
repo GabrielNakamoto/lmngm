@@ -7,7 +7,3 @@ Experimental 2.5d video game art piece for King Lear (High School English projec
 - luminoscity reduction pass
 - sobel + gauss gradient edge detection
 - descretized luminoscity + gradient angle to blit output ascii
-- final color + loom shaders to framebuffer
-
-![alt text](render.png)
-<p align="center">Latest render</p>
